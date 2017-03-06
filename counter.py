@@ -1,6 +1,7 @@
 import sqlite3
 from time import sleep
 import datetime
+import requests
 
 DEBUG = True
 DEBUG_count = 0
@@ -23,18 +24,51 @@ TIMER_DATA_SEND = None # time
 FORMAT_DATE_TIME = "%y-%m-%d %H:%M:%S"
 
 
+def get_data_DB():
+    with sqlite3.connect("test.db") as con:
+        cur = con.cursor()
+        cur.execute("SELECT time, visitors, temperature FROM counter ")
+        all_rec = cur.fetchall()
+        cur.close()
+    return all_rec
+
+
+def send_data(url, all_rec):
+    headers = {"content-type": "application/json"}
+    url = url
+    data = all_rec
+    r = requests.post(url, headers=headers, json=data)
+    return r
+
+
+def db_clear(send_date_RESPONSE=False):
+    OK = send_date_RESPONSE
+    if OK:
+        with sqlite3.connect("test.db") as con:
+            cur = con.cursor()
+            cur.execute("DELETE FROM counter")
+            cur.close()
+            print("All - Send, All - Clear")
+    else:
+        print("Data NOT Send")
+
+
 # --- DB create ---
 def db_create():
     with sqlite3.connect("test.db") as con:
         cur = con.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS counter(time PRIMARY KEY, visitors INT, temperature INT)")
+        cur.execute("CREATE TABLE IF NOT EXISTS event(time PRIMARY KEY, description TEXT)")
         cur.close()
 
 
-def db_load(time, visitors, temperature):
+def db_load(time, visitors=0, temperature=0, alert=False, discription="Sensor Failure" ):
     with sqlite3.connect("test.db") as con:
         cur = con.cursor()
-        cur.execute("INSERT INTO Counter (time, visitors, temperature) values(?, ?, ?)", (time, visitors, temperature))
+        if not alert:
+            cur.execute("INSERT INTO counter (time, visitors, temperature) values(?, ?, ?)", (time, visitors, temperature))
+        else:
+            cur.execute("INSERT INTO event (time, description) values(?, ?)", (time, discription))
         cur.close()
 
 
@@ -63,14 +97,8 @@ if not DEBUG:
 db_create()
 
 
-first_var = -1
-# Initialization first_var
-while True:
-    if not datetime.datetime.now().second:
-        first_var = get_data()["count"]
-        sleep(1)
-        break
-
+# Initialization first_var current time
+first_var = get_data()["count"]
 current_minute = datetime.datetime.now()
 
 if DEBUG:
@@ -88,6 +116,16 @@ while True:
 
         current_minute = new_current_minute
         m_data = get_data()
+
+        # Sensor failure
+        if m_data["count"] < first_var:
+            first_var = m_data["count"]
+            db_load(new_current_minute.strftime(FORMAT_DATE_TIME), alert=True)
+            if DEBUG:
+                print("Sensor Failure")
+            sleep(TIMER_INTERVAL_SEC)
+            continue
+
         temp_v = m_data["count"]
         clients_count = round((temp_v - first_var) / 2)  # clients count = cross count / 2
         first_var = temp_v
@@ -98,6 +136,9 @@ while True:
             print("Time of recent record in DB: ", new_current_minute.strftime(FORMAT_DATE_TIME))
 
     sleep(TIMER_INTERVAL_SEC)
+
+
+
 
 
 
