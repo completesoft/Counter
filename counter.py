@@ -2,6 +2,11 @@ import sqlite3
 from time import sleep
 import datetime
 import requests
+import os
+from json import load
+
+
+
 
 DEBUG = True
 DEBUG_count = 0
@@ -12,20 +17,29 @@ if DEBUG:
 else:
     import minimalmodbus
 
-COUNTER_PORT = "COM3"
-COUNTER_MODBUS_ADDR = 11
-COUNTER_MODBUS_START_REG = 32
-COUNTER_MODBUS_COUNT_REG = 3
+CONFIG = load(open('config.json', 'r'))
 
-TIMER_INTERVAL_SEC = 10
-TIMER_DATA_DOWNLOAD = 1  # minute
-TIMER_DATA_SEND = None # time
+DB_LITE = CONFIG["DB"]
 
-FORMAT_DATE_TIME = "%y-%m-%d %H:%M:%S"
+COUNTER_PORT = CONFIG["COUNTER_PORT"]
+COUNTER_MODBUS_ADDR = CONFIG["COUNTER_MODBUS_ADDR"]
+COUNTER_MODBUS_START_REG = CONFIG["COUNTER_MODBUS_START_REG"]
+COUNTER_MODBUS_COUNT_REG = CONFIG["COUNTER_MODBUS_COUNT_REG"]
+
+# offset from the COUNTER_MODBUS_START_REG
+MOD_BUS_REG_COUNTER = CONFIG["MOD_BUS_REG_COUNTER"]
+MOD_BUS_REG_TEMPERATURE = CONFIG["MOD_BUS_REG_TEMPERATURE"]
+MOD_BUS_REG_ENERGY = CONFIG["MOD_BUS_REG_ENERGY"]
+
+TIMER_INTERVAL_SEC = CONFIG["TIMER_INTERVAL_SEC"]
+TIMER_DATA_DOWNLOAD_MIN = CONFIG["TIMER_DATA_DOWNLOAD_MIN"]  # minute
+TIMER_DATA_SEND = CONFIG["TIMER_DATA_SEND"] # time
+
+FORMAT_DATE_TIME = CONFIG["FORMAT_DATE_TIME"]
 
 
 def get_data_DB():
-    with sqlite3.connect("test.db") as con:
+    with sqlite3.connect(DB_LITE) as con:
         cur = con.cursor()
         cur.execute("SELECT time, visitors, temperature FROM counter ")
         all_rec = cur.fetchall()
@@ -55,20 +69,25 @@ def db_clear(send_date_RESPONSE=False):
 
 # --- DB create ---
 def db_create():
-    with sqlite3.connect("test.db") as con:
-        cur = con.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS counter(time PRIMARY KEY, visitors INT, temperature INT)")
-        cur.execute("CREATE TABLE IF NOT EXISTS event(time PRIMARY KEY, description TEXT)")
-        cur.close()
+    if not os.access(DB_LITE, os.F_OK):
+        with sqlite3.connect(DB_LITE) as con:
+            cur = con.cursor()
+            cur.execute("CREATE TABLE IF NOT EXISTS counter(time PRIMARY KEY, visitors INT, temperature INT)")
+            cur.execute("CREATE TABLE IF NOT EXISTS event_list (id_event INT UNIQUE, description TEXT)")
+            for event in CONFIG["ALERT_EVENT"][0].items():
+                cur.execute("INSERT INTO event_list (id_event, description) values(?, ?)", (event[1], event[0]))
+
+            cur.execute("CREATE TABLE IF NOT EXISTS event(time PRIMARY KEY, id_event INT, FOREIGN KEY(id_event) REFERENCES event_list(id_event))")
+            cur.close()
 
 
-def db_load(time, visitors=0, temperature=0, alert=False, discription="Sensor Failure" ):
+def db_write(time, visitors=0, temperature=0, alert=False, discription_id=0):
     with sqlite3.connect("test.db") as con:
         cur = con.cursor()
         if not alert:
             cur.execute("INSERT INTO counter (time, visitors, temperature) values(?, ?, ?)", (time, visitors, temperature))
         else:
-            cur.execute("INSERT INTO event (time, description) values(?, ?)", (time, discription))
+            cur.execute("INSERT INTO event (time, id_event) values(?, ?)", (time, discription_id))
         cur.close()
 
 
@@ -80,10 +99,11 @@ def get_data():
         DEBUG_count = DEBUG_count + random.randint(1, 20)
         regs.append(DEBUG_count)
         regs.append(1)
-        regs.append(random.randint(20, 30))
+        # regs.append(random.randint(0,1))
+        regs.append(0)
     else:
         regs = instrument.read_registers(COUNTER_MODBUS_START_REG, COUNTER_MODBUS_COUNT_REG)
-    data = {"count": regs[0], "temp": regs[2]}
+    data = {"count": regs[MOD_BUS_REG_COUNTER], "temp": regs[MOD_BUS_REG_TEMPERATURE], "power_on": regs[MOD_BUS_REG_ENERGY]}
     return data
 
 
@@ -97,7 +117,8 @@ if not DEBUG:
 db_create()
 
 
-# Initialization first_var current time
+# Initialization: first_var - visitors counter, power_on - list of power indicator data
+power_on = []
 first_var = get_data()["count"]
 current_minute = datetime.datetime.now()
 
@@ -107,12 +128,18 @@ if DEBUG:
 
 while True:
 
-    new_current_minute = current_minute + datetime.timedelta(minutes=TIMER_DATA_DOWNLOAD)
+    new_current_minute = current_minute + datetime.timedelta(minutes=TIMER_DATA_DOWNLOAD_MIN)
+    power_on.append(get_data()["power_on"])
 
-    # if new_current_minute > current_minute or (new_current_minute == 0 and current_minute == 59):
+    # Visitors counter and temperature recording
     if new_current_minute.minute == datetime.datetime.now().minute:
         if DEBUG:
             print("current time(minutes): {}, next time(minutes): {}, first counter {}".format(current_minute.minute, new_current_minute.minute, first_var))
+
+        # check power supply of condition
+        if power_on.count(1)<len(power_on)/2:
+            db_write(new_current_minute.strftime(FORMAT_DATE_TIME), alert=True, discription_id=CONFIG["ALERT_EVENT"][0]["ALERT_CONDITIONER_POWER"])
+        power_on = []
 
         current_minute = new_current_minute
         m_data = get_data()
@@ -120,7 +147,10 @@ while True:
         # Sensor failure
         if m_data["count"] < first_var:
             first_var = m_data["count"]
-            db_load(new_current_minute.strftime(FORMAT_DATE_TIME), alert=True)
+            db_write(new_current_minute.strftime(FORMAT_DATE_TIME), alert=True, discription_id=CONFIG["ALERT_EVENT"][0]["ALERT_VISITOR_SENSOR"])
+            temperature = m_data["temp"]
+            db_write(new_current_minute.strftime(FORMAT_DATE_TIME), temperature=temperature)
+
             if DEBUG:
                 print("Sensor Failure")
             sleep(TIMER_INTERVAL_SEC)
@@ -130,12 +160,13 @@ while True:
         clients_count = round((temp_v - first_var) / 2)  # clients count = cross count / 2
         first_var = temp_v
         temperature = m_data["temp"]
-        db_load(new_current_minute.strftime(FORMAT_DATE_TIME), clients_count, temperature)
+        db_write(new_current_minute.strftime(FORMAT_DATE_TIME), clients_count, temperature)
 
         if DEBUG:
             print("Time of recent record in DB: ", new_current_minute.strftime(FORMAT_DATE_TIME))
 
     sleep(TIMER_INTERVAL_SEC)
+
 
 
 
