@@ -72,7 +72,7 @@ def db_create():
     if not os.access(DB_LITE, os.F_OK):
         with sqlite3.connect(DB_LITE) as con:
             cur = con.cursor()
-            cur.execute("CREATE TABLE IF NOT EXISTS counter(time PRIMARY KEY, visitors INT, temperature INT)")
+            cur.execute("CREATE TABLE IF NOT EXISTS counter(time PRIMARY KEY, visitors INT, temperature INT, conditioner INT)")
             cur.execute("CREATE TABLE IF NOT EXISTS event_list (id_event INT UNIQUE, description TEXT)")
             for event in CONFIG["ALERT_EVENT"][0].items():
                 cur.execute("INSERT INTO event_list (id_event, description) values(?, ?)", (event[1], event[0]))
@@ -81,11 +81,11 @@ def db_create():
             cur.close()
 
 
-def db_write(time, visitors=0, temperature=0, alert=False, discription_id=0):
+def db_write(time, visitors=0, temperature=0, conditioner=0, alert=False, discription_id=0):
     with sqlite3.connect("test.db") as con:
         cur = con.cursor()
         if not alert:
-            cur.execute("INSERT INTO counter (time, visitors, temperature) values(?, ?, ?)", (time, visitors, temperature))
+            cur.execute("INSERT INTO counter (time, visitors, temperature, conditioner) values(?, ?, ?, ?)", (time, visitors, temperature, conditioner))
         else:
             cur.execute("INSERT INTO event (time, id_event) values(?, ?)", (time, discription_id))
         cur.close()
@@ -99,11 +99,11 @@ def get_data():
         DEBUG_count = DEBUG_count + random.randint(1, 20)
         regs.append(DEBUG_count)
         regs.append(1)
-        # regs.append(random.randint(0,1))
-        regs.append(0)
+        regs.append(random.randint(0,1))
+        # regs.append(0)
     else:
         regs = instrument.read_registers(COUNTER_MODBUS_START_REG, COUNTER_MODBUS_COUNT_REG)
-    data = {"count": regs[MOD_BUS_REG_COUNTER], "temp": regs[MOD_BUS_REG_TEMPERATURE], "power_on": regs[MOD_BUS_REG_ENERGY]}
+    data = {"count": regs[MOD_BUS_REG_COUNTER], "temp": regs[MOD_BUS_REG_TEMPERATURE], "a_c_power": regs[MOD_BUS_REG_ENERGY]}
     return data
 
 
@@ -117,8 +117,8 @@ if not DEBUG:
 db_create()
 
 
-# Initialization: first_var - visitors counter, power_on - list of power indicator data
-power_on = []
+# Initialization: first_var - visitors counter
+a_c_power = 0
 first_var = get_data()["count"]
 current_minute = datetime.datetime.now()
 
@@ -129,20 +129,23 @@ if DEBUG:
 while True:
 
     new_current_minute = current_minute + datetime.timedelta(minutes=TIMER_DATA_DOWNLOAD_MIN)
-    power_on.append(get_data()["power_on"])
+    a_c_power += TIMER_INTERVAL_SEC*(get_data()["a_c_power"])
+
+    print("Текущие показания работы кондиционера: ",a_c_power)
 
     # Visitors counter and temperature recording
     if new_current_minute.minute == datetime.datetime.now().minute:
         if DEBUG:
             print("current time(minutes): {}, next time(minutes): {}, first counter {}".format(current_minute.minute, new_current_minute.minute, first_var))
 
-        # check power supply of condition
-        if power_on.count(1)<len(power_on)/2:
-            db_write(new_current_minute.strftime(FORMAT_DATE_TIME), alert=True, discription_id=CONFIG["ALERT_EVENT"][0]["ALERT_CONDITIONER_POWER"])
-        power_on = []
-
         current_minute = new_current_minute
         m_data = get_data()
+
+        # Console debug info
+        print("За прошедшую минуту данные по регистрам для записи в бд:")
+        for reg, val in m_data.items():
+            if reg=="a_c_power": val=a_c_power
+            print("Регистр: ", reg, " | данные: ", val)
 
         # Sensor failure
         if m_data["count"] < first_var:
@@ -158,9 +161,11 @@ while True:
 
         temp_v = m_data["count"]
         clients_count = round((temp_v - first_var) / 2)  # clients count = cross count / 2
-        first_var = temp_v
         temperature = m_data["temp"]
-        db_write(new_current_minute.strftime(FORMAT_DATE_TIME), clients_count, temperature)
+        db_write(new_current_minute.strftime(FORMAT_DATE_TIME), clients_count, temperature, a_c_power)
+
+        first_var = temp_v
+        a_c_power = 0
 
         if DEBUG:
             print("Time of recent record in DB: ", new_current_minute.strftime(FORMAT_DATE_TIME))
