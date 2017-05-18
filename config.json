@@ -11,10 +11,11 @@
   "TIMER_DATA_DOWNLOAD_MIN": 1,
   "TIMER_DATA_SEND": "None",
   "FORMAT_DATE_TIME": "%y-%m-%d %H:%M:%S",
-  "ALERT_EVENT":[
+  "EVENT":[
     {
       "ALERT_CONDITIONER_POWER": 10,
-      "ALERT_VISITOR_SENSOR": 20
+      "ALERT_VISITOR_SENSOR": 20,
+      "START_COUNTER":100
     }
   ]
 }

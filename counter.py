@@ -8,7 +8,7 @@ from json import load
 
 
 
-DEBUG = False
+DEBUG = True
 DEBUG_count = 0
 # DEBUG = False
 
@@ -74,7 +74,7 @@ def db_create():
             cur = con.cursor()
             cur.execute("CREATE TABLE IF NOT EXISTS counter(time PRIMARY KEY, visitors INT, temperature INT, conditioner INT)")
             cur.execute("CREATE TABLE IF NOT EXISTS event_list (id_event INT UNIQUE, description TEXT)")
-            for event in CONFIG["ALERT_EVENT"][0].items():
+            for event in CONFIG["EVENT"][0].items():
                 cur.execute("INSERT INTO event_list (id_event, description) values(?, ?)", (event[1], event[0]))
 
             cur.execute("CREATE TABLE IF NOT EXISTS event(time PRIMARY KEY, id_event INT, FOREIGN KEY(id_event) REFERENCES event_list(id_event))")
@@ -126,6 +126,9 @@ db_create()
 a_c_power = 0
 first_var = get_data()["count"]
 current_minute = datetime.datetime.now()
+
+# --- Wtite in DB Start_counter event ---
+db_write(current_minute.strftime(FORMAT_DATE_TIME), alert=True, discription_id=CONFIG["EVENT"][0]["START_COUNTER"])
 
 if DEBUG:
     print("Начальный счетчик установлен в: ", first_var)
