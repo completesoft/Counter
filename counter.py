@@ -2,13 +2,13 @@ import sqlite3
 from time import sleep
 import datetime
 import requests
-import os
+import os, sys
 from json import load
 
 
 
 
-DEBUG = True
+DEBUG = False
 DEBUG_count = 0
 # DEBUG = False
 
@@ -109,8 +109,13 @@ def get_data():
 
 # --- START MODBUS ---
 if not DEBUG:
-    instrument = minimalmodbus.Instrument(COUNTER_PORT, COUNTER_MODBUS_ADDR)
-    # minimalmodbus.CLOSE_PORT_AFTER_EACH_CALL = True
+    try:
+        instrument = minimalmodbus.Instrument(COUNTER_PORT, COUNTER_MODBUS_ADDR)
+        # minimalmodbus.CLOSE_PORT_AFTER_EACH_CALL = True
+    except Exception as e:
+        print(e)
+        input('Нажмите любую кнопку')
+        sys.exit(1)
 
 
 # --- create DB ---
